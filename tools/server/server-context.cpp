@@ -348,6 +348,19 @@ struct server_slot {
             } else {
                 GGML_ASSERT(spec_i_batch.empty());
 
+                std::thread checkpoint_thread;
+                if (ctx_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL) {
+                    const auto n_tokens = prompt.tokens.size();
+                    checkpoint_thread = std::thread([this, n_tokens]() {
+                        const int64_t t_start = ggml_time_us();
+                        server_prompt_checkpoint_update(spec_ckpt, ctx, this->id, n_tokens);
+                        const int64_t t_total = ggml_time_us() - t_start;
+                        printf("checkpoint total: %f ms\n", t_total / 1000.0);
+                        SLT_WRN(*this, "created speculative checkpoint (pos_min = %d, pos_max = %d, n_tokens = %zu, size = %.3f MiB)\n",
+                                spec_ckpt.pos_min, spec_ckpt.pos_max, n_tokens, (float) spec_ckpt.data.size() / 1024 / 1024);
+                    });
+                }
+
                 // generate a new draft
                 spec_draft = common_speculative_draft(spec.get(), params_spec, tokens, sampled);
                 n_draft_total += spec_draft.size();
@@ -357,18 +370,8 @@ struct server_slot {
                     spec_draft.resize(n_draft_max);
                 }
 
-                if (!spec_draft.empty() && ctx_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL) {
-                    const auto n_tokens = prompt.tokens.size();
-
-                    const int64_t t_start = ggml_time_us();
-
-                    server_prompt_checkpoint_update(spec_ckpt, ctx, this->id, n_tokens);
-
-                    const int64_t t_total = ggml_time_us() - t_start;
-                    printf("checkpoint total: %f ms\n", t_total / 1000.0);
-
-                    SLT_WRN(*this, "created speculative checkpoint (pos_min = %d, pos_max = %d, n_tokens = %zu, size = %.3f MiB)\n",
-                            spec_ckpt.pos_min, spec_ckpt.pos_max, n_tokens, (float) spec_ckpt.data.size() / 1024 / 1024);
+                if (checkpoint_thread.joinable()) {
+                    checkpoint_thread.join();
                 }
             }
 
