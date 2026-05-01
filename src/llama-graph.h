@@ -1043,8 +1043,8 @@ struct llm_graph_context {
             ggml_tensor * cls_out,
             ggml_tensor * cls_out_b,
             ggml_tensor * cls_norm,
-            ggml_tensor * projector_0_w,
-            ggml_tensor * projector_2_w) const;
+            ggml_tensor * dense_2 = nullptr,
+            ggml_tensor * dense_3 = nullptr) const;
 
     //
     // sampling (backend sampling)
@@ -1059,7 +1059,8 @@ struct llm_graph_context {
     void build_dense_out(
             ggml_tensor * dense_2,
             ggml_tensor * dense_2_b,
-            ggml_tensor * dense_3) const;
+            ggml_tensor * dense_3,
+            llm_ffn_op_type act = LLM_FFN_SILU) const;
 };
 
 // TODO: better name

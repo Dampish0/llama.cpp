@@ -4010,20 +4010,24 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     // output rerank head
                     cls_out = create_tensor(tn(LLM_TENSOR_CLS_OUT, "weight"), {n_embd, hparams.n_cls_out}, TENSOR_NOT_REQUIRED);
 
-                    // Probe projector tensor shapes from GGUF metadata
-                    // GGUF stores shapes in inner-dim-first order: [n_embd, proj_dim] for projector.0.weight
+                    // Probe for projector tensors (jina-reranker-v3)
+                    // Supports both "projector.0.weight"/"projector.2.weight" (original) and
+                    // "dense_2_out"/"dense_3_out" (via tensor_mapping.py)
                     {
-                        const std::string proj_name = tn(LLM_TENSOR_PROJECTOR_0).str();
-                        const struct ggml_tensor * t_proj_0 = ml.get_tensor_meta(proj_name.c_str());
-                        LLAMA_LOG_INFO("%s: probing projector tensor '%s': %s\n", __func__, proj_name.c_str(), t_proj_0 ? "found" : "not found");
-                        if (t_proj_0) {
+                        const auto t_proj_0 = ml.get_tensor_meta(tn(LLM_TENSOR_PROJECTOR_0).str().c_str());
+                        const auto t_proj_2 = ml.get_tensor_meta(tn(LLM_TENSOR_PROJECTOR_2).str().c_str());
+
+                        // Also try dense_2_out / dense_3_out (mapped via tensor_mapping.py)
+                        ggml_tensor const * t_proj_0_final = t_proj_0 ? t_proj_0 : ml.get_tensor_meta("dense_2_out");
+                        ggml_tensor const * t_proj_2_final = t_proj_2 ? t_proj_2 : ml.get_tensor_meta("dense_3_out");
+
+                        if (t_proj_0_final && t_proj_2_final) {
                             // GGUF shape: [n_embd, proj_dim] -> ne[0]=n_embd, ne[1]=proj_dim
-                            const int64_t proj_dim = t_proj_0->ne[1];
-                            LLAMA_LOG_INFO("%s: proj_dim = %ld, t_proj_0 ne[0]=%zu ne[1]=%zu\n", __func__, (long)proj_dim, t_proj_0->ne[0], t_proj_0->ne[1]);
+                            const int64_t proj_dim = t_proj_0_final->ne[1];
                             hparams.n_cls_out = proj_dim;
-                            hparams.n_embd_out_impl = proj_dim;  // output dim for projector-based rerankers
-                            projector_0_w = create_tensor(tn(LLM_TENSOR_PROJECTOR_0), {n_embd, proj_dim}, TENSOR_NOT_REQUIRED);
-                            projector_2_w = create_tensor(tn(LLM_TENSOR_PROJECTOR_2), {proj_dim, proj_dim}, TENSOR_NOT_REQUIRED);
+                            hparams.n_embd_out_impl = proj_dim;
+                            projector_0_w = create_tensor(tn(LLM_TENSOR_PROJECTOR_0), {n_embd, proj_dim}, 0);
+                            projector_2_w = create_tensor(tn(LLM_TENSOR_PROJECTOR_2), {proj_dim, proj_dim}, 0);
                         }
                     }
 
@@ -9089,7 +9093,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
     }
 
     // add on pooling layer
-    llm->build_pooling(cls, cls_b, cls_out, cls_out_b, cls_norm, projector_0_w, projector_2_w);
+    llm->build_pooling(cls, cls_b, cls_out, cls_out_b, cls_norm, this->projector_0_w, this->projector_2_w);
 
     // add backend sampling layers (if any)
     llm->build_sampling();

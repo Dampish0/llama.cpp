@@ -2686,7 +2686,8 @@ llm_graph_input_mem_hybrid_iswa * llm_graph_context::build_inp_mem_hybrid_iswa()
 void llm_graph_context::build_dense_out(
     ggml_tensor * dense_2,
     ggml_tensor * dense_2_b,
-    ggml_tensor * dense_3) const {
+    ggml_tensor * dense_3,
+    llm_ffn_op_type act) const {
     if (!cparams.embeddings || !(dense_2 || dense_2_b || dense_3)) {
         return;
     }
@@ -2698,6 +2699,10 @@ void llm_graph_context::build_dense_out(
     }
     if (dense_2_b) {
         cur = ggml_add(ctx0, cur, dense_2_b);
+    }
+    // Apply activation function between dense_2 and dense_3
+    if (dense_3 && act != LLM_FFN_SILU) {
+        cur = ggml_relu(ctx0, cur);
     }
     if (dense_3) {
         cur = ggml_mul_mat(ctx0, dense_3, cur);
@@ -2714,8 +2719,8 @@ void llm_graph_context::build_pooling(
         ggml_tensor * cls_out,
         ggml_tensor * cls_out_b,
         ggml_tensor * cls_norm,
-        ggml_tensor * projector_0_w,
-        ggml_tensor * projector_2_w) const {
+        ggml_tensor * dense_2,
+        ggml_tensor * dense_3) const {
     if (!cparams.embeddings) {
         return;
     }
@@ -2767,10 +2772,12 @@ void llm_graph_context::build_pooling(
                 // 2-layer MLP projector for jina-reranker-v3 etc.
                 // https://huggingface.co/jinaai/jina-reranker-v3
                 // projector: hidden -> proj_dim -> ReLU -> proj_dim
-                if (projector_0_w && projector_2_w) {
-                    cur = ggml_mul_mat(ctx0, projector_0_w, cur);
+                // mapped to dense_2 / dense_3 via tensor_mapping.py
+                if (dense_2 && dense_3) {
+                    cur = ggml_mul_mat(ctx0, dense_2, cur);
+                    // ReLU activation between dense_2 and dense_3
                     cur = ggml_relu(ctx0, cur);
-                    cur = ggml_mul_mat(ctx0, projector_2_w, cur);
+                    cur = ggml_mul_mat(ctx0, dense_3, cur);
                 } else {
                     // classification head
                     // https://github.com/huggingface/transformers/blob/5af7d41e49bbfc8319f462eb45253dcb3863dfb7/src/transformers/models/roberta/modeling_roberta.py#L1566
