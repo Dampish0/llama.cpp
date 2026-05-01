@@ -2713,7 +2713,9 @@ void llm_graph_context::build_pooling(
         ggml_tensor * cls_b,
         ggml_tensor * cls_out,
         ggml_tensor * cls_out_b,
-        ggml_tensor * cls_norm) const {
+        ggml_tensor * cls_norm,
+        ggml_tensor * projector_0_w,
+        ggml_tensor * projector_2_w) const {
     if (!cparams.embeddings) {
         return;
     }
@@ -2762,38 +2764,47 @@ void llm_graph_context::build_pooling(
                     cur = ggml_get_rows(ctx0, inp, inp_cls);
                 }
 
-                // classification head
-                // https://github.com/huggingface/transformers/blob/5af7d41e49bbfc8319f462eb45253dcb3863dfb7/src/transformers/models/roberta/modeling_roberta.py#L1566
-                if (cls) {
-                    cur = ggml_mul_mat(ctx0, cls, cur);
-                    if (cls_b) {
-                        cur = ggml_add(ctx0, cur, cls_b);
+                // 2-layer MLP projector for jina-reranker-v3 etc.
+                // https://huggingface.co/jinaai/jina-reranker-v3
+                // projector: hidden -> proj_dim -> ReLU -> proj_dim
+                if (projector_0_w && projector_2_w) {
+                    cur = ggml_mul_mat(ctx0, projector_0_w, cur);
+                    cur = ggml_relu(ctx0, cur);
+                    cur = ggml_mul_mat(ctx0, projector_2_w, cur);
+                } else {
+                    // classification head
+                    // https://github.com/huggingface/transformers/blob/5af7d41e49bbfc8319f462eb45253dcb3863dfb7/src/transformers/models/roberta/modeling_roberta.py#L1566
+                    if (cls) {
+                        cur = ggml_mul_mat(ctx0, cls, cur);
+                        if (cls_b) {
+                            cur = ggml_add(ctx0, cur, cls_b);
+                        }
+                        if (arch == LLM_ARCH_MODERN_BERT) {
+                            cur = ggml_gelu(ctx0, cur);
+                        } else {
+                            cur = ggml_tanh(ctx0, cur);
+                        }
+                        if (cls_norm) {
+                            // head norm
+                            cur = build_norm(cur, cls_norm, NULL, LLM_NORM, -1);
+                        }
                     }
-                    if (arch == LLM_ARCH_MODERN_BERT) {
-                        cur = ggml_gelu(ctx0, cur);
-                    } else {
-                        cur = ggml_tanh(ctx0, cur);
-                    }
-                    if (cls_norm) {
-                        // head norm
-                        cur = build_norm(cur, cls_norm, NULL, LLM_NORM, -1);
-                    }
-                }
 
-                // some models don't have `cls_out`, for example: https://huggingface.co/jinaai/jina-reranker-v1-tiny-en
-                // https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/blob/cb5347e43979c3084a890e3f99491952603ae1b7/modeling_bert.py#L884-L896
-                // Single layer classification head (direct projection)
-                // https://github.com/huggingface/transformers/blob/f4fc42216cd56ab6b68270bf80d811614d8d59e4/src/transformers/models/bert/modeling_bert.py#L1476
-                if (cls_out) {
-                    cur = ggml_mul_mat(ctx0, cls_out, cur);
-                    if (cls_out_b) {
-                        cur = ggml_add(ctx0, cur, cls_out_b);
+                    // some models don't have `cls_out`, for example: https://huggingface.co/jinaai/jina-reranker-v1-tiny-en
+                    // https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/blob/cb5347e43979c3084a890e3f99491952603ae1b7/modeling_bert.py#L884-L896
+                    // Single layer classification head (direct projection)
+                    // https://github.com/huggingface/transformers/blob/f4fc42216cd56ab6b68270bf80d811614d8d59e4/src/transformers/models/bert/modeling_bert.py#L1476
+                    if (cls_out) {
+                        cur = ggml_mul_mat(ctx0, cls_out, cur);
+                        if (cls_out_b) {
+                            cur = ggml_add(ctx0, cur, cls_out_b);
+                        }
                     }
-                }
 
-                // softmax for qwen3 reranker
-                if (arch == LLM_ARCH_QWEN3 || arch == LLM_ARCH_QWEN3VL) {
-                    cur = ggml_soft_max(ctx0, cur);
+                    // softmax for qwen3 reranker (only when not using projector)
+                    if (arch == LLM_ARCH_QWEN3 || arch == LLM_ARCH_QWEN3VL) {
+                        cur = ggml_soft_max(ctx0, cur);
+                    }
                 }
             } break;
         default:

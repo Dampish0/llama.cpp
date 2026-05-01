@@ -540,6 +540,10 @@ struct llama_model {
     struct ggml_tensor * cls_out_b = nullptr;
     struct ggml_tensor * cls_norm  = nullptr;
 
+    // projector (for jina-reranker-v3 etc.) - 2-layer MLP: hidden->proj_dim->ReLU->proj_dim
+    struct ggml_tensor * projector_0_w = nullptr;
+    struct ggml_tensor * projector_2_w = nullptr;
+
     struct ggml_tensor * conv1d   = nullptr;
     struct ggml_tensor * conv1d_b = nullptr;
 

@@ -1042,7 +1042,9 @@ struct llm_graph_context {
             ggml_tensor * cls_b,
             ggml_tensor * cls_out,
             ggml_tensor * cls_out_b,
-            ggml_tensor * cls_norm) const;
+            ggml_tensor * cls_norm,
+            ggml_tensor * projector_0_w,
+            ggml_tensor * projector_2_w) const;
 
     //
     // sampling (backend sampling)

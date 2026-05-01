@@ -4756,6 +4756,64 @@ class Qwen3Model(Qwen2Model):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("JinaForRanking")
+class JinaForRankingModel(Qwen3Model):
+    """jina-reranker-v3: Qwen3 dual-encoder with 2-layer MLP projector.
+
+    Architecture:
+        - Base: Qwen3 (hidden_size=1024)
+        - Special tokens: <|embed_token|> and <|rerank_token|> mark query/doc boundaries
+        - Projector: 1024 -> 512 -> ReLU -> 512 (no biases)
+        - Scoring: cosine similarity of projected embeddings
+
+    Ref: https://huggingface.co/jinaai/jina-reranker-v3
+    """
+
+    model_arch = gguf.MODEL_ARCH.QWEN3
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.is_rerank = True
+        # Override: jina-reranker-v3 uses projector, not lm_head-based cls_out
+        self.token_false_id = None
+        self.token_true_id = None
+
+    def _is_qwen3_reranker(self) -> bool:
+        return True
+
+    def _find_rerank_config(self):
+        # Override: jina-reranker-v3 doesn't use yes/no tokens
+        # It uses a projector MLP instead of extracting from lm_head
+        self.is_rerank = True
+        self.is_tied_embeddings = self.hparams.get("tie_word_embeddings", False)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_pooling_type(gguf.PoolingType.RANK)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Skip lm_head entirely - jina-reranker-v3 doesn't use it for embeddings
+        if "lm_head" in name:
+            return
+
+        # Skip embed_tokens - parent Qwen3Model would extract cls_out from it, which we don't want
+        if "embed_tokens" in name:
+            yield from Qwen2Model.modify_tensors(self, data_torch, name, bid)
+            return
+
+        # Handle projector tensors: projector.0.weight -> projector.0.weight, projector.2.weight -> projector.2.weight
+        if name.startswith("projector."):
+            new_name = name.replace("projector.", "projector.")
+            # HF: [out, in] row-major. ggml_mul_mat(a, b) computes a^T @ b.
+            # We need a^T = HF weight, so a = HF^T with shape [in, out].
+            # Transpose so that after GGUF dim reversal, C++ sees {in, out} with correct data.
+            # No transpose needed — GGUF writer reverses dims, ggml_mul_mat does a^T @ b
+            # which effectively transposes back to HF layout. Same pattern as ffn_down.
+            yield (new_name, data_torch)
+            return
+        yield from Qwen2Model.modify_tensors(self, data_torch, name, bid)
+
+
 @ModelBase.register("Qwen3MoeForCausalLM")
 class Qwen3MoeModel(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3MOE
